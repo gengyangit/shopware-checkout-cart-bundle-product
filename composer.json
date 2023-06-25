@@ -1,0 +1,31 @@
+{
+    "name": "yanduu/shopware-checkout-cart-bundle-product",
+    "description": "Plugin used to add automatically bundle product in checkout cart",
+    "version": "1.0.0",
+    "type": "shopware-platform-plugin",
+    "license": "proprietary",
+    "authors": [
+      {
+        "name": "Yanduu GmbH"
+      }
+    ],
+    "require": {
+      "shopware/core": "*"
+    },
+    "extra": {
+      "shopware-plugin-class": "Yanduu\\CheckoutCartBundleProduct\\YanduuCheckoutCartBundleProduct",
+      "label": {
+        "de-DE": "Yanduu Checkout Cart Bundle Product",
+        "en-GB": "Yanduu Checkout Cart Bundle Productt"
+      },
+      "description": {
+        "de-DE": "Dieses Plugins bietet die möglichkeit um bundle produkten automatisch in warenkorb hinzufügen.",
+        "en-GB": "This plugin offers the possibility to add automatically bundle product in checkout cart"
+      }
+    },
+    "autoload": {
+      "psr-4": {
+        "Yanduu\\CheckoutCartBundleProduct\\": "src/"
+      }
+    }
+  }

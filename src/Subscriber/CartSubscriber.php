@@ -10,6 +10,7 @@ use Shopware\Core\Checkout\Cart\Event\CartChangedEvent;
 use Shopware\Core\Checkout\Cart\Event\AfterLineItemRemovedEvent;
 use Shopware\Core\Checkout\Cart\LineItem\LineItem;
 use Shopware\Core\Checkout\Cart\Event\AfterLineItemAddedEvent;
+use Shopware\Core\Checkout\Cart\Event\AfterLineItemQuantityChangedEvent;
 use Shopware\Core\Content\Product\ProductEntity;
 use Shopware\Core\Framework\Context;
 use Shopware\Core\Framework\DataAbstractionLayer\Event\EntityWrittenEvent;
@@ -55,7 +56,8 @@ class CartSubscriber implements EventSubscriberInterface
     public static function getSubscribedEvents(): array
     {
         return [
-            CartChangedEvent::class => 'onCartChanged',
+            AfterLineItemAddedEvent::class => 'onLineItemAdded',
+            AfterLineItemQuantityChangedEvent::class => 'onLineItemQuantityChanged',
             AfterLineItemRemovedEvent::class => 'onLineItemRemoved'
         ];
     }
@@ -63,53 +65,165 @@ class CartSubscriber implements EventSubscriberInterface
     /**
      * @param \Shopware\Core\Checkout\Cart\Event\CartChangedEvent $event
      */
-    public function onCartChanged(CartChangedEvent $event): void
+    public function onLineItemAdded(AfterLineItemAddedEvent $event): void
     {
-        $cart = $event->getCart();
-        $lineItems = $cart->getLineItems();
+        $lineItems = $event->getLineItems();
 
         if (count($lineItems) === 0) {
             return;
         }
 
         foreach ($lineItems as $lineItem) {
-	        $customFields = $lineItem->getPayloadValue('customFields');
-            if (!$customFields) {
-                continue;
-	        }
+            if (!$lineItem->getPayload()) {
+                $this->updateBundleProductQuantity($lineItem, $event);
 
-            if (!array_key_exists('custom_sl_artikel_VERSANDKARTON', $customFields)) {
                 continue;
             }
 
-            $bundleProduct =  $this->getProduct($customFields['custom_sl_artikel_VERSANDKARTON']);
-
-            if ($bundleProduct == null) {
-                continue;
-            }
-
-            foreach ($lineItems as $lineItem2) {
-
-                if (
-                    $lineItem2->getPayloadValue('productNumber') === $bundleProduct->getProductnumber()
-                    && $lineItem2->getQuantity() != $lineItem->getQuantity()
-                ) {
-                    $lineItem2->setQuantity($lineItem->getQuantity());
-                    $cart->markModified();
-                    $this->cartService->recalculate($cart, $event->getContext());
-
-                    return;
-                }
-            }
-
-            $bundleProductLineItem = $this->createLineItem($bundleProduct, $lineItem->getQuantity());
-
-            $cart->add($bundleProductLineItem);
-            $cart->markModified();
-
-            $this->cartService->recalculate($cart, $event->getContext());
-
+            $this->addBundleProduct($lineItem, $event);            
         }
+    }
+
+    public function onLineItemQuantityChanged(AfterLineItemQuantityChangedEvent  $event) 
+    {
+        $items = $event->getItems();
+
+        if (count($items) === 0 ) {
+            return ;
+        }
+
+        $cart = $event->getCart();
+        foreach ($items as $item) {
+            $lineItem = $this->getLineItemById($item['id'], $cart);
+
+            $customFields = $lineItem->getPayloadValue('customFields');
+
+            if (!$customFields) {
+                return;
+            }
+
+            if (!array_key_exists('custom_sl_artikel_VERSANDKARTON', $customFields) 
+                || !isset($customFields['custom_sl_artikel_VERSANDKARTON'])
+            ) {
+                return;
+            }
+
+            $bundleProduct =  $this->getProductBySku($customFields['custom_sl_artikel_VERSANDKARTON']);
+
+            $lineItem = $this->getLineItemByReferencedId(
+                $bundleProduct->getId(), 
+                $event->getCart()
+            );
+
+            if ($lineItem === null) {
+                continue;
+            }
+
+            $lineItem->setQuantity($item['quantity']);
+            $cart->markModified();
+            $this->cartService->recalculate($cart, $event->getSalesChannelContext());
+        }
+
+    }
+
+    /**
+     * 
+     */
+    protected function getLineItemById(string $lineItemId, $cart) 
+    {
+        $lineItems = $cart->getLineItems();
+
+        foreach ($lineItems as $lineItem) {
+            if ($lineItem->getId() !== $lineItemId) {
+                continue;
+            }
+
+            return $lineItem;
+        }
+
+        return null;
+    }
+
+    protected function getLineItemByReferencedId(string $referencedId, $cart) 
+    {
+        $lineItems = $cart->getLineItems();
+
+        foreach ($lineItems as $lineItem) {
+            if ($lineItem->getReferencedId() !== $referencedId) {
+                continue;
+            }
+
+            return $lineItem;
+        }
+
+        return null;
+    }
+
+    /**
+     * 
+     */
+    protected function addBundleProduct(LineItem $lineItem, $event): void 
+    {
+        $cart = $event->getCart();
+        
+        $customFields = $lineItem->getPayloadValue('customFields');
+
+        if (!$customFields) {
+            return;
+        }
+
+        if (!array_key_exists('custom_sl_artikel_VERSANDKARTON', $customFields) 
+            || !isset($customFields['custom_sl_artikel_VERSANDKARTON'])
+        ) {
+            return;
+        }
+
+        $bundleProduct =  $this->getProductBySku($customFields['custom_sl_artikel_VERSANDKARTON']);
+
+        if ($bundleProduct == null) {
+            return;
+        }
+
+        $bundleProductLineItem = $this->createLineItem($bundleProduct, $lineItem->getQuantity());
+
+        $cart->add($bundleProductLineItem);
+        $cart->markModified();
+
+        $this->cartService->recalculate($cart, $event->getSalesChannelContext());
+    }
+
+    /**
+     * 
+     */
+    protected function updateBundleProductQuantity(LineItem $lineItem, $event): void
+    {
+        if (!$lineItem->getReferencedId()) {
+            return;
+        }
+
+        $product =  $this->getProductById($lineItem->getReferencedId());
+        $customFields = $product->getCustomFields();
+
+        if (!array_key_exists('custom_sl_artikel_VERSANDKARTON', $customFields) 
+            || !isset($customFields['custom_sl_artikel_VERSANDKARTON'])
+        ) {
+            return;
+        }
+
+        $cart = $event->getCart();
+        $bundleProduct =  $this->getProductBySku($customFields['custom_sl_artikel_VERSANDKARTON']);
+        
+        $lineItemBundleProduct = $this->getLineItemByReferencedId($bundleProduct->getId(), $cart);
+
+        if ($lineItemBundleProduct === null) {
+            return;
+        }
+
+        $lineItemProduct = $this->getLineItemByReferencedId($lineItem->getReferencedId(), $cart);
+        $lineItemBundleProduct->setQuantity($lineItemProduct->getQuantity());
+        $cart->markModified();
+        $this->cartService->recalculate($cart, $event->getSalesChannelContext());
+
     }
 
      /**
@@ -121,17 +235,17 @@ class CartSubscriber implements EventSubscriberInterface
         $lineItems= $event->getLineItems();
 
         foreach ($lineItems as $lineItem) {
-	        $customFields = $lineItem->getPayloadValue('customFields');
+            $customFields = $lineItem->getPayloadValue('customFields');
             if (!$customFields) {
                 continue;
-	        }
+            }
 
             if (!array_key_exists('custom_sl_artikel_VERSANDKARTON', $customFields)) {
                 continue;
             }
 
             foreach ($cart->getLineItems() as $index => $lineItem2) {
-                $bundleProduct =  $this->getProduct($customFields['custom_sl_artikel_VERSANDKARTON']);
+                $bundleProduct =  $this->getProductBySku($customFields['custom_sl_artikel_VERSANDKARTON']);
 
                 if (!$bundleProduct) {
                     continue;
@@ -147,12 +261,20 @@ class CartSubscriber implements EventSubscriberInterface
     }
 
 
-    private function getProduct(string $productNumber): ?ProductEntity
+    private function getProductBySku(string $productNumber): ?ProductEntity
     {
         $criteria = new Criteria();
         $criteria->addFilter(new EqualsFilter('productNumber', $productNumber));
 
         $product = $this->productRepository->search($criteria, $this->context)->first();
+
+        return $product;
+    }
+
+    private function getProductById(string $productId): ?ProductEntity
+    {
+        $product = $this->productRepository
+            ->search(new Criteria([$productId]), $this->context)->first();
 
         return $product;
     }

@@ -240,18 +240,20 @@ class CartSubscriber implements EventSubscriberInterface
                 continue;
             }
 
-            if (!array_key_exists('custom_sl_artikel_VERSANDKARTON', $customFields)) {
+            if (!array_key_exists('custom_sl_artikel_VERSANDKARTON', $customFields)
+                || !isset($customFields['custom_sl_artikel_VERSANDKARTON'])
+            ) {
+                continue;
+            }
+
+            $bundleProduct =  $this->getProductBySku($customFields['custom_sl_artikel_VERSANDKARTON']);
+
+            if (!$bundleProduct) {
                 continue;
             }
 
             foreach ($cart->getLineItems() as $index => $lineItem2) {
-                $bundleProduct =  $this->getProductBySku($customFields['custom_sl_artikel_VERSANDKARTON']);
-
-                if (!$bundleProduct) {
-                    continue;
-                }
-
-                if ($bundleProduct->getProductnumber() === $customFields['custom_sl_artikel_VERSANDKARTON']) {
+                if ($lineItem2->getReferencedId() === $bundleProduct->getId()) {
                     $cart->remove($index);
                     $cart->markModified();
                     $this->cartService->recalculate($cart, $event->getSalesChannelContext());                    

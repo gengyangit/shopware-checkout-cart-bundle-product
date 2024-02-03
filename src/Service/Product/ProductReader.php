@@ -5,7 +5,7 @@ namespace Yanduu\CheckoutCartBundleProduct\Service\Product;
 use Shopware\Core\Content\Product\ProductEntity;
 use Shopware\Core\Framework\DataAbstractionLayer\Search\Criteria;
 use Shopware\Core\Framework\DataAbstractionLayer\Search\Filter\EqualsFilter;
-use Shopware\Core\Framework\DataAbstractionLayer\EntityRepositoryInterface;
+use Shopware\Core\Framework\DataAbstractionLayer\EntityRepository;
 use Shopware\Core\Framework\Context;
 
 
@@ -24,11 +24,10 @@ class ProductReader implements ProductReaderInterface
      /**
      * Constructor 
      * 
-     * @param \Shopware\Core\Framework\DataAbstractionLayer\EntityRepositoryInterface $productRepository
+     * @param \Shopware\Core\Framework\DataAbstractionLayer\EntityRepository $productRepository
      */
-    public function __construct(
-        EntityRepositoryInterface $productRepository
-    ) {
+    public function __construct(EntityRepository $productRepository) 
+    {
         $this->productRepository = $productRepository;
 
         $this->context = Context::createDefaultContext();

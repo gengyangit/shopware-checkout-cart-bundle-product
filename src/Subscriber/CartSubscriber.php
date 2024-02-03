@@ -12,6 +12,7 @@ use Shopware\Core\Checkout\Cart\SalesChannel\CartService;
 use Shopware\Core\Framework\Context;
 use Shopware\Core\Framework\Uuid\Uuid;
 use Shopware\Core\Content\Product\ProductEntity;
+use Shopware\Core\System\SalesChannel\SalesChannelContext;
 use Symfony\Component\EventDispatcher\EventSubscriberInterface;
 use Yanduu\CheckoutCartBundleProduct\Service\Product\ProductReaderInterface;
 
@@ -47,7 +48,6 @@ class CartSubscriber implements EventSubscriberInterface
         $this->context = Context::createDefaultContext();
     }
 
-
     /**
      * @return array<string, string>
      */
@@ -61,26 +61,25 @@ class CartSubscriber implements EventSubscriberInterface
     }
 
     /**
-     * @param \Shopware\Core\Checkout\Cart\Event\CartChangedEvent $event
+     * @param \Shopware\Core\Checkout\Cart\Event\AfterLineItemAddedEvent $event
      * 
      * @return void
      */
     public function onLineItemAdded(AfterLineItemAddedEvent $event): void
     {
         $lineItems = $event->getLineItems();
-
-        if (count($lineItems) === 0) {
-            return;
-        }
+        $cart = $event->getCart();
+        $salesChannelContext = $event->getSalesChannelContext();
 
         foreach ($lineItems as $lineItem) {
-            if (!$lineItem->getPayload()) {
-                $this->updateBundleProduct($lineItem, $event);
+            print_r($lineItem); exit();
+            $bundleProduct = $this->getBundleProductByProductId($lineItem->getId());
 
+            if (!$bundleProduct) {
                 continue;
             }
 
-            $this->addBundleProduct($lineItem, $event);            
+            $this->executeSaveBundleProduct($cart, $lineItem, $bundleProduct, $salesChannelContext);
         }
     }
 
@@ -100,20 +99,19 @@ class CartSubscriber implements EventSubscriberInterface
         $cart = $event->getCart();
         foreach ($items as $item) {
             $lineItem = $this->getLineItemById($item['id'], $cart);
-
-            $bundleProduct = $this->getBundleProductByLineItem($lineItem);
+            $bundleProduct = $this->getBundleProductByProductId($lineItem->getId());
 
             if ($bundleProduct === null) {
                 continue;
             }
 
-            $lineItem = $this->getLineItemByReferencedId($bundleProduct->getId(), $cart);
-
-            if ($lineItem === null) {
+            $bundleProductLineItem = $this->getCartItemByProductId($cart, $bundleProduct->getId());
+            
+            if ($bundleProductLineItem === null) {
                 continue;
             }
 
-            $lineItem->setQuantity($item['quantity']);
+            $bundleProductLineItem->setQuantity($item['quantity']);
             $cart->markModified();
             $this->cartService->recalculate($cart, $event->getSalesChannelContext());
         }
@@ -130,7 +128,7 @@ class CartSubscriber implements EventSubscriberInterface
         $lineItems = $event->getLineItems();
 
         foreach ($lineItems as $lineItem) {
-            $bundleProduct = $this->getBundleProductByLineItem($lineItem);
+            $bundleProduct = $this->getBundleProductByProductId($lineItem->getId());
 
             if (!$bundleProduct) {
                 continue;
@@ -153,92 +151,101 @@ class CartSubscriber implements EventSubscriberInterface
 
     /**
      * @param \Shopware\Core\Checkout\Cart\LineItem\LineItem $lineItem
-     * @param \Shopware\Core\Checkout\Cart\Event\AfterLineItemRemovedEvent $event
-     * 
-     * @return void
-     */
-    protected function addBundleProduct(LineItem $lineItem, AfterLineItemAddedEvent $event): void 
-    {
-        $bundleProduct = $this->getBundleProductByLineItem($lineItem);
-
-        if ($bundleProduct == null) {
-            return;
-        }
-
-        $bundleProductLineItem = $this->createLineItem($bundleProduct, $lineItem->getQuantity());
-
-        $cart = $event->getCart();
-        $cart->add($bundleProductLineItem);
-        $cart->markModified();
-
-        $this->cartService->recalculate($cart, $event->getSalesChannelContext());
-    }
-
-    /**
-     * @param \Shopware\Core\Checkout\Cart\LineItem\LineItem $lineItem
-     * @param \Shopware\Core\Checkout\Cart\Event\AfterLineItemRemovedEvent $event
-     * 
-     * @return void
-     */
-    protected function updateBundleProduct(LineItem $lineItem, AfterLineItemAddedEvent $event): void
-    {
-        if (!$lineItem->getReferencedId()) {
-            return;
-        }
-
-        $bundleProduct = $this->getBundleProductByProductId($lineItem->getReferencedId());
-
-        if ($bundleProduct == null) {
-            return;
-        }
-
-        $cart = $event->getCart();
-
-        $bundleProductLineItem = $this->getLineItemByReferencedId($bundleProduct->getId(), $cart);
-
-        if ($bundleProductLineItem === null) {
-            return;
-        }
-
-        $productLineItem = $this->getLineItemByReferencedId($lineItem->getReferencedId(), $cart);
-        $bundleProductLineItem->setQuantity($productLineItem->getQuantity());
-
-        $cart->markModified();
-        
-        $this->cartService->recalculate($cart, $event->getSalesChannelContext());
-    }
-
-    /**
-     * @param string $lineItemId
+     * @param \Shopware\Core\Checkout\Cart\LineItem\LineItem $bundleProductLineItem
      * @param \Shopware\Core\Checkout\Cart\Cart $cart
+     * @param \Shopware\Core\System\SalesChannel\SalesChannelContext $salesChannelContext
      * 
-     * @return \Shopware\Core\Checkout\Cart\LineItem\LineItem
+     * @return void
      */
-    protected function getLineItemById(string $lineItemId, Cart $cart): ?LineItem 
+    protected function executeSaveBundleProduct(
+        Cart $cart, 
+        LineItem $lineItem, 
+        ProductEntity $bundleProduct,
+        SalesChannelContext $salesChannelContext
+    ): void {
+        $bundleProductLineItem = $this->getCartItemByProductId($cart, $bundleProduct->getId());
+        
+        if (!$bundleProductLineItem) {
+            $this->addBundleProduct($lineItem, $cart, $bundleProduct, $salesChannelContext);
+
+            return;
+        }
+
+        $productLineItem = $this->getCartItemByProductId($cart, $lineItem->getId());
+        $lineItem->setQuantity($productLineItem->getQuantity());
+
+        $this->updateBundleProduct($lineItem, $bundleProductLineItem, $cart, $salesChannelContext);
+    }
+
+    /**
+     * @param \Shopware\Core\Checkout\Cart\Cart $cart
+     * @param string $productId
+     */
+    protected function getCartItemByProductId(Cart $cart, string $productId) 
     {
         foreach ($cart->getLineItems() as $lineItem) {
-            if ($lineItem->getId() !== $lineItemId) {
-                continue;
-            }
 
-            return $lineItem;
+            if ($lineItem->getId() === $productId) {
+                return $lineItem;
+            }
         }
 
         return null;
     }
 
     /**
-     * @param string $referencedId
+     * @param \Shopware\Core\Checkout\Cart\LineItem\LineItem $lineItem
+     * @param \Shopware\Core\Checkout\Cart\LineItem\LineItem $bundleProductLineItem
+     * @param \Shopware\Core\Checkout\Cart\Cart $cart
+     * @param \Shopware\Core\System\SalesChannel\SalesChannelContext $salesChannelContext
+     * 
+     * @return void
+     */
+    protected function addBundleProduct(
+        LineItem $lineItem, 
+        Cart $cart,
+        ProductEntity $bundleProduct,
+        SalesChannelContext $salesChannelContext
+    ): void {
+        $bundleProductLineItem = $this->createLineItem($bundleProduct, $lineItem->getQuantity());
+
+        $cart->add($bundleProductLineItem);
+        $cart->markModified();
+
+        $this->cartService->recalculate($cart, $salesChannelContext);
+    }
+
+    /**
+     * @param \Shopware\Core\Checkout\Cart\LineItem\LineItem $lineItem
+     * @param \Shopware\Core\Checkout\Cart\LineItem\LineItem $bundleProductLineItem
+     * @param \Shopware\Core\Checkout\Cart\Cart $cart
+     * @param \Shopware\Core\System\SalesChannel\SalesChannelContext $salesChannelContext
+     * 
+     * @return void
+     */
+    protected function updateBundleProduct(
+        LineItem $lineItem, 
+        LineItem $bundleProductLineItem, 
+        Cart $cart,
+        SalesChannelContext $salesChannelContext
+    ): void {
+        $bundleProductLineItem->setQuantity($lineItem->getQuantity());
+
+        $cart->markModified();
+        
+        $this->cartService->recalculate($cart, $salesChannelContext);
+    }
+
+    /**
+     * @param string $lineItemId
      * @param \Shopware\Core\Checkout\Cart\Cart $cart
      * 
-     * @return \Shopware\Core\Checkout\Cart\LineItem\LineItem
+     * @return \Shopware\Core\Checkout\Cart\LineItem\LineItem|null
      */
-    protected function getLineItemByReferencedId(string $referencedId, Cart $cart): ?LineItem  
+    protected function getLineItemById(string $lineItemId, Cart $cart): ?LineItem 
     {
-        $lineItems = $cart->getLineItems();
-
         foreach ($cart->getLineItems() as $lineItem) {
-            if ($lineItem->getReferencedId() !== $referencedId) {
+            if ($lineItem->getId() !== $lineItemId) {
                 continue;
             }
 
@@ -267,38 +274,9 @@ class CartSubscriber implements EventSubscriberInterface
     }
 
     /**
-     * @param \Shopware\Core\Checkout\Cart\LineItem\LineItem $lineItem
-     * 
-     * @return \Shopware\Core\Content\Product\ProductEntity
-     */
-    protected function getBundleProductByLineItem(LineItem $lineItem): ?ProductEntity
-    {
-        $customFields = $lineItem->getPayloadValue(static::KEY_CUSTOM_FIELDS);
-
-        if (!$customFields) {
-            return null;
-        }
-
-        if (!array_key_exists(static::CUSTOM_FIELD_VERSANDKARTON, $customFields) 
-            || !isset($customFields[static::CUSTOM_FIELD_VERSANDKARTON])
-        ) {
-            return null;
-        }
-
-        $bundleProduct =  $this->productReader
-            ->getProductByProductNumber($customFields[static::CUSTOM_FIELD_VERSANDKARTON]);
-
-        if ($bundleProduct == null) {
-            return null;
-        }
-
-        return $bundleProduct;
-    }
-
-    /**
      * @param string $productId
      * 
-     * @return \Shopware\Core\Content\Product\ProductEntity
+     * @return \Shopware\Core\Content\Product\ProductEntity|null
      */
     protected function getBundleProductByProductId(string $productId): ?ProductEntity
     {

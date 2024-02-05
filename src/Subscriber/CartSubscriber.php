@@ -72,7 +72,6 @@ class CartSubscriber implements EventSubscriberInterface
         $salesChannelContext = $event->getSalesChannelContext();
 
         foreach ($lineItems as $lineItem) {
-            print_r($lineItem); exit();
             $bundleProduct = $this->getBundleProductByProductId($lineItem->getId());
 
             if (!$bundleProduct) {
@@ -91,29 +90,23 @@ class CartSubscriber implements EventSubscriberInterface
     public function onLineItemQuantityChanged(AfterLineItemQuantityChangedEvent  $event): void 
     {
         $items = $event->getItems();
-
-        if (count($items) === 0 ) {
-            return ;
-        }
-
         $cart = $event->getCart();
+        $salesChannelContext = $event->getSalesChannelContext();
         foreach ($items as $item) {
-            $lineItem = $this->getLineItemById($item['id'], $cart);
+            $lineItem = $this->getLineItemById($cart, $item['id']);
             $bundleProduct = $this->getBundleProductByProductId($lineItem->getId());
 
             if ($bundleProduct === null) {
                 continue;
             }
 
-            $bundleProductLineItem = $this->getCartItemByProductId($cart, $bundleProduct->getId());
+            $bundleProductLineItem = $this->getLineItemById($cart, $bundleProduct->getId());
             
             if ($bundleProductLineItem === null) {
-                continue;
+                $this->addBundleProduct($lineItem, $cart, $bundleProduct, $salesChannelContext);
             }
 
-            $bundleProductLineItem->setQuantity($item['quantity']);
-            $cart->markModified();
-            $this->cartService->recalculate($cart, $event->getSalesChannelContext());
+            $this->updateBundleProduct($lineItem, $bundleProductLineItem, $cart, $salesChannelContext);
         }
     }
 
@@ -126,7 +119,7 @@ class CartSubscriber implements EventSubscriberInterface
     {
         $cart = $event->getCart();
         $lineItems = $event->getLineItems();
-
+        $salesChannelContext = $event->getSalesChannelContext();
         foreach ($lineItems as $lineItem) {
             $bundleProduct = $this->getBundleProductByProductId($lineItem->getId());
 
@@ -134,25 +127,14 @@ class CartSubscriber implements EventSubscriberInterface
                 continue;
             }
 
-            foreach ($cart->getLineItems() as $index => $item) {
-
-                if ($item->getReferencedId() !== $bundleProduct->getId()) {
-                    continue;                                       
-                }
-
-                $cart->remove($index);
-                $cart->markModified();
-                    
-                $this->cartService->recalculate($cart, $event->getSalesChannelContext()); 
-
-            }
+            $this->removeBundleProduct($cart, $bundleProduct, $salesChannelContext);
         }
     }
 
     /**
+     * @param \Shopware\Core\Checkout\Cart\Cart $cart
      * @param \Shopware\Core\Checkout\Cart\LineItem\LineItem $lineItem
      * @param \Shopware\Core\Checkout\Cart\LineItem\LineItem $bundleProductLineItem
-     * @param \Shopware\Core\Checkout\Cart\Cart $cart
      * @param \Shopware\Core\System\SalesChannel\SalesChannelContext $salesChannelContext
      * 
      * @return void
@@ -163,7 +145,7 @@ class CartSubscriber implements EventSubscriberInterface
         ProductEntity $bundleProduct,
         SalesChannelContext $salesChannelContext
     ): void {
-        $bundleProductLineItem = $this->getCartItemByProductId($cart, $bundleProduct->getId());
+        $bundleProductLineItem = $this->getLineItemById($cart, $bundleProduct->getId());
         
         if (!$bundleProductLineItem) {
             $this->addBundleProduct($lineItem, $cart, $bundleProduct, $salesChannelContext);
@@ -171,7 +153,7 @@ class CartSubscriber implements EventSubscriberInterface
             return;
         }
 
-        $productLineItem = $this->getCartItemByProductId($cart, $lineItem->getId());
+        $productLineItem = $this->getLineItemById($cart, $lineItem->getId());
         $lineItem->setQuantity($productLineItem->getQuantity());
 
         $this->updateBundleProduct($lineItem, $bundleProductLineItem, $cart, $salesChannelContext);
@@ -179,13 +161,15 @@ class CartSubscriber implements EventSubscriberInterface
 
     /**
      * @param \Shopware\Core\Checkout\Cart\Cart $cart
-     * @param string $productId
+     * @param string $id
+     * 
+     * @return \Shopware\Core\Checkout\Cart\LineItem\LineItem|null
      */
-    protected function getCartItemByProductId(Cart $cart, string $productId) 
+    protected function getLineItemById(Cart $cart, string $id) 
     {
         foreach ($cart->getLineItems() as $lineItem) {
 
-            if ($lineItem->getId() === $productId) {
+            if ($lineItem->getId() === $id) {
                 return $lineItem;
             }
         }
@@ -195,8 +179,8 @@ class CartSubscriber implements EventSubscriberInterface
 
     /**
      * @param \Shopware\Core\Checkout\Cart\LineItem\LineItem $lineItem
-     * @param \Shopware\Core\Checkout\Cart\LineItem\LineItem $bundleProductLineItem
      * @param \Shopware\Core\Checkout\Cart\Cart $cart
+     * @param \Shopware\Core\Content\Product\ProductEntity $bundleProduct
      * @param \Shopware\Core\System\SalesChannel\SalesChannelContext $salesChannelContext
      * 
      * @return void
@@ -237,22 +221,28 @@ class CartSubscriber implements EventSubscriberInterface
     }
 
     /**
-     * @param string $lineItemId
      * @param \Shopware\Core\Checkout\Cart\Cart $cart
+     * @param \Shopware\Core\Content\Product\ProductEntity $bundleProduct
+     * @param \Shopware\Core\System\SalesChannel\SalesChannelContext $salesChannelContext
      * 
-     * @return \Shopware\Core\Checkout\Cart\LineItem\LineItem|null
+     * @return void
      */
-    protected function getLineItemById(string $lineItemId, Cart $cart): ?LineItem 
-    {
-        foreach ($cart->getLineItems() as $lineItem) {
-            if ($lineItem->getId() !== $lineItemId) {
-                continue;
+    protected function removeBundleProduct(
+        Cart $cart,
+        ProductEntity $bundleProduct,
+        SalesChannelContext $salesChannelContext
+    ): void {
+        foreach ($cart->getLineItems() as $index => $item) {
+
+            if ($item->getReferencedId() !== $bundleProduct->getId()) {
+                continue;                                       
             }
 
-            return $lineItem;
+            $cart->remove($index);
+            $cart->markModified();
+                
+            $this->cartService->recalculate($cart, $salesChannelContext); 
         }
-
-        return null;
     }
 
     /**
